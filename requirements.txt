@@ -1,0 +1,9 @@
+modin[all]
+notebook
+matplotlib
+numpy
+scipy
+sklearn
+nltk
+jupytext
+seaborn
