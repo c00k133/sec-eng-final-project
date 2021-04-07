@@ -7,7 +7,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.10.3
+#       jupytext_version: 1.11.1
 #   kernelspec:
 #     display_name: Python 3
 #     language: python
@@ -28,9 +28,24 @@
 # ## EDA
 
 # %%
+# %pip install modin[all] pandas==1.2.3
+
+# %%
+'''
+try:
+    import modin.pandas as pd
+except ModuleNotFoundError:
+    import pandas as pd
+'''
 import pandas as pd
+
 import seaborn as sns
 import matplotlib.pyplot as plt
+import requests
+import os
+
+from zipfile import ZipFile, Path
+from io import StringIO
 
 # %% [markdown]
 # ---
@@ -43,24 +58,42 @@ sns.set(style='whitegrid')
 HAM_COLOR = '#0000ff99'
 SPAM_COLOR = '#ff000099'
 
+
+def save_figure(filename, figure_dir='illustrations', dpi=300, *args, **kwargs):
+    if not os.path.exists(figure_dir):
+        os.makedirs(figure_dir, exist_ok=True)
+    fullpath = os.path.join(figure_dir, filename)
+    plt.savefig(fullpath, dpi=dpi, *args, **kwargs)
+
+
 # %% [markdown]
 # ---
 
 # %%
 column_names = [
-    'spam_or_ham',
-    'message',
-    'unknown1',
-    'unknown2',
-    'unknown3',
+    'IsSpam',
+    'Message',
+]
+extra_columns = [
+    'Unknown1',
+    'Unknown2',
+    'Unknown3',
 ]
 
+DATASET_URL = 'https://archive.ics.uci.edu/ml/machine-learning-databases/00228/smsspamcollection.zip'
+DATA_ZIP_FILE = 'archive.zip'
+if not os.path.exists(DATA_ZIP_FILE):
+    req = requests.get(DATASET_URL, DATA_ZIP_FILE)
+    with open(DATA_ZIP_FILE, 'wb+') as fd:
+        fd.write(req.content)
+
+raw_data = Path(DATA_ZIP_FILE, at='SMSSpamCollection')
+
 raw_df = pd.read_csv(
-    #'./archive.zip',
-    #compression='zip',
-    'spam.csv',
+    raw_data.open(),
     encoding='latin-1', # Inferred from other Kaggle notebooks
     header=0, # Required when using explicit names
+    delimiter='\t',
     names=column_names,
     skipinitialspace=False,
 )
@@ -69,26 +102,20 @@ raw_df.describe()
 
 # %% [markdown]
 # Noticed a bunch of extra column values, probably unescaped commas in the messages.
+#
+# This was only the case for data downloaded from Kaggle, the data from the paper site did not have this issue.
 
 # %%
+'''
 long_messages = raw_df[
     raw_df.unknown1.notna() | raw_df.unknown2.notna() | raw_df.unknown3.notna()
 ]
 long_messages.describe()
 
-# %% [markdown]
-# Certainly looks like it...
-
-# %%
 message_names = column_names[1:]
 concatenated = ','.join(long_messages.loc[281][message_names])
 print(concatenated)
 
-
-# %% [markdown]
-# Let's concatenate them!
-
-# %%
 def concatenate_extras(row):
     non_empty_parts = row[message_names].dropna()
     return ','.join(non_empty_parts)
@@ -97,16 +124,19 @@ concatenated_messages = long_messages.apply(concatenate_extras, axis='columns')
 raw_df.loc[concatenated_messages.index, 'message'] = concatenated_messages
 
 extra_columns = message_names[1:]
-df = raw_df.drop(columns=extra_columns)
+sms = raw_df.drop(columns=extra_columns)
+'''
 
 # %% [markdown]
 # Much better...
 
 # %%
-df.describe()
+sms = raw_df
+sms.loc[sms["IsSpam"] == "spam", "SpamValue"] = 1
+sms.loc[sms["IsSpam"] == "ham", "SpamValue"] = 0
 
 # %%
-spam_or_ham_count = df.spam_or_ham.value_counts()
+spam_or_ham_count = sms.IsSpam.value_counts()
 spam_or_ham_count.plot.pie(
     legend=False,
     ylabel='',
@@ -119,12 +149,14 @@ spam_or_ham_count.plot.pie(
     colors=[HAM_COLOR, SPAM_COLOR],
 )
 
-# %%
-df['message_length'] = df.message.apply(len)
-df[['message_length']].value_counts()
+save_figure('spam_or_ham_pie.png')
 
 # %%
-df[df.spam_or_ham == 'ham'].message_length.plot.hist(
+sms['MessageLength'] = sms.Message.apply(len)
+sms[['MessageLength']].value_counts()
+
+# %%
+sms[sms.IsSpam == 'ham'].MessageLength.plot.hist(
     bins=35,
     figsize=(12, 6),
     
@@ -132,7 +164,7 @@ df[df.spam_or_ham == 'ham'].message_length.plot.hist(
     color=HAM_COLOR,
     label='Ham messages',
 )
-df[df.spam_or_ham == 'spam'].message_length.plot.hist(
+sms[sms.IsSpam == 'spam'].MessageLength.plot.hist(
     legend=True,
     color=SPAM_COLOR,
     label='Spam messages',
@@ -140,18 +172,36 @@ df[df.spam_or_ham == 'spam'].message_length.plot.hist(
 
 plt.xlabel('Message length')
 
+save_figure('message_length_histogram.png')
+
+# %%
+sms[sms.IsSpam == 'ham'].describe()
+
+# %%
+sms[sms.IsSpam == 'spam'].describe()
+
 # %% [markdown]
 # ---
 #
 # ## Analytics
 
 # %%
+'''
+try:
+    import modin.pandas as pd
+except ModuleNotFoundError:
+    import pandas as pd
+'''
 import pandas as pd
+
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.stats as stats
 import math
 import os
+import string
+
+from functools import partial, reduce
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
@@ -162,27 +212,13 @@ import nltk
 from nltk.corpus import stopwords
 
 # %%
-NLTK_DATA_DIR = './nltk_data'
-os.makedirs(NLTK_DATA_DIR, exist_ok=True)
-
-if NLTK_DATA_DIR not in nltk.data.path:
-    nltk.data.path.append(NLTK_DATA_DIR)
-
-# %%
-nltk.download('punkt', download_dir=NLTK_DATA_DIR)
-nltk.download('stopwords', download_dir=NLTK_DATA_DIR)
-
-# %%
-#data = pd.read_csv("spam.csv", encoding='ISO-8859-1') 
-#data = data[['v1', 'v2']]
-#data = data.rename(columns={"v1": "IsSpam", "v2": "Message"}, errors="raise")
-data = df.rename(columns={'spam_or_ham': 'IsSpam', 'message': 'Message'}, errors='raise')
-data.loc[data["IsSpam"] == "spam", "IsSpam"] = 1
-data.loc[data["IsSpam"] == "ham", "IsSpam"] = 0
+nltk.download('punkt')
+nltk.download('stopwords')
 
 
 # %% [markdown]
 # Remove capitalization unless the word is all upper case.
+# Lowercase all caps words might remove messge sentiment.
 #
 # http://sentiment.christopherpotts.net/tokenizing.html#capitalization
 #
@@ -194,70 +230,108 @@ data.loc[data["IsSpam"] == "ham", "IsSpam"] = 0
 # Didn't seem to have a difference...
 # The random tree walk performed worst when we used lower-not-for-caps casing.
 # The all lower was worst for Naïve Bayes.
+#
+# Data science article regarding Singaporean text mining:
+# https://towardsdatascience.com/topic-modeling-singapores-subreddit-comments-with-natural-language-processing-336d15da3ff4
 
 # %%
-def lower_case_unless_all_caps(word):
-    if word.upper() == word:
-        return word
-    return word.lower()
+def compose(*fns):
+    return partial(reduce, lambda v, fn: fn(v), fns)
+
+def filter_punctation(message):
+    return ''.join(
+        char
+        for char in message
+        if char not in string.punctuation
+    )
 
 def tokenize(message):
-    tokenized = nltk.word_tokenize(message)
-    return [
-        #lower_case_unless_all_caps(word)
-        #word.lower()
+    return nltk.word_tokenize(message)
+
+def lower_case_unless_all_caps(tokens):
+    return (
+        token.lower()
+        for token in tokens
+        if token.upper() != token
+    )
+
+slang_stopwords = ['u', 'ü', 'ur', '4', '2', 'im', 'dont', 'doin', 'ure']
+singlish_stopwords = [
+    'lah', 'lor', 'shiok', 'bojio', 'like',
+    'hor', 'sian', 'walau', 'eh', 'damn',
+    'ya', 'wah', 'omg', 'bb', 'leh', 'lar'
+]
+considered_stopwords = [
+    *stopwords.words('english'),
+    #*slang_stopwords,
+    #*singlish_stopwords,
+]
+
+def prune_stopwords(message_contents):
+    return (
         word
-        for word in tokenized
-    ]
+        for word in message_contents
+        if word.lower() not in considered_stopwords
+    )
 
-data["Tokens"] = data["Message"].apply(tokenize)
+message_parsing_pipe = compose(
+    #filter_punctation,
+    tokenize,
+    #lower_case_unless_all_caps,
+    prune_stopwords,
+    list,
+)
 
-# %%
-stop = stopwords.words('english')
-data["Tokens"] = data["Tokens"].apply(lambda x: [item for item in x if item not in stop])
-# tokenList = list(set([item for sublist in data["Tokens"].tolist() for item in sublist]))
-# print(len(tokenList))
+sms["Tokens"] = sms["Message"].apply(message_parsing_pipe)
 
-# %%
-tokenList = list(set([item for sublist in data["Tokens"].tolist() for item in sublist]))
-tokenData = pd.DataFrame(tokenList, columns = ["Words"])
-tokenData["nSpam"] = 0
-tokenData["nHam"] = 0
-
-# %%
-print(data.shape)
-for index, row in data[["IsSpam", "Tokens"]].iterrows():
-    columnName = "nSpam" if row.IsSpam == 1 else "nHam"
-    for token in row["Tokens"]:
-        tokenData.loc[tokenData["Words"] == token, columnName] += 1
+# %% [markdown]
+# https://franekjemiolo.pl/flattening-lists-pandas/
 
 # %%
-tokenData
+flattened_tokens = pd.DataFrame(
+    [
+        (index, value, 1)
+        for (index, values) in sms['Tokens'].iteritems()
+        for value in values
+    ],
+    columns=['index', 'Token', 'Count']
+).set_index('index')
+
+flattened = sms[['IsSpam']].join(flattened_tokens)
+count = flattened.pivot_table(
+    index='Token',
+    columns='IsSpam',
+    values='Count',
+    aggfunc=np.sum,
+    fill_value=0
+)
+token_data = count.reset_index().rename(columns={'ham': 'nHam', 'spam': 'nSpam'})
 
 # %%
-# tokenData["Difference"] = tokenData["nSpam"] - tokenData["nHam"]
-# tokenData.sort_values(by=["Difference"], ascending=False).head(10)
-
-tokenData["Probability"] = (tokenData["nSpam"] - tokenData["nHam"]) / (tokenData["nSpam"] + tokenData["nHam"])
-tokenData.sort_values(by=["Probability"], ascending=False).head(10)
+token_data["Probability"] = token_data["nHam"] / (token_data["nSpam"] + token_data["nHam"])
+token_data.sort_values(by=["Probability"], ascending=False).head(10)
 
 # %%
-identifiers = data.copy()
-identifiers = data.rename(columns={"Message": "Original_Message"}, errors="raise")
+identifiers = sms.copy()
+identifiers = sms.rename(columns={"Message": "OriginalMessage"}, errors="raise")
 
 # %%
-for item in tokenData["Words"].tolist():
+for item in token_data["Token"].unique():
     identifiers[item] = 0
 
-# %%
-for item in tokenData["Words"].tolist():
-    identifiers.loc[identifiers["Original_Message"].str.contains(item, regex=False), item] = 1
+# %% [markdown]
+# The cell below could really benefit from some optimization...
+# If using `.pivot_table(...)` would be possible we could get insane speed bumps!
 
 # %%
-isSpam = pd.to_numeric(identifiers["IsSpam"])
-identfiers_matrix = identifiers.drop(["Original_Message", "Tokens", "IsSpam"], axis=1)
+for item in token_data["Token"].unique():
+    identifiers.loc[identifiers["OriginalMessage"].str.contains(item, regex=False), item] = 1
 
-X_train, X_test, y_train, y_test = train_test_split(identfiers_matrix, isSpam, test_size=0.2, random_state=0)
+# %%
+is_spam = pd.to_numeric(identifiers["SpamValue"])
+identfiers_matrix = identifiers.drop(["OriginalMessage", "Tokens", "IsSpam", "SpamValue", "MessageLength"], axis=1)
+
+X_train, X_test, y_train, y_test = train_test_split(identfiers_matrix, is_spam, test_size=0.2, random_state=0)
 
 # %%
 gnb = GaussianNB()
@@ -270,7 +344,7 @@ success
 clf = RandomForestClassifier(max_depth=3, random_state=0)
 clf.fit(X_train, y_train)
 predictions = clf.predict(X_test)
-success = sum(y_test.array == predictions)/X_test.shape[0]
+success = sum(y_test.array == predictions) / X_test.shape[0]
 success
 
 # %%
