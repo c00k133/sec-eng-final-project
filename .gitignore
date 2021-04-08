@@ -6,6 +6,8 @@
 # Project
 nltk_data
 spam.csv
+illustrations
+archive.zip
 
 # Environment
 python.nix
