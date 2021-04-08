@@ -47,6 +47,10 @@ import os
 from zipfile import ZipFile, Path
 from io import StringIO
 
+import nltk
+from nltk.corpus import stopwords
+from wordcloud import WordCloud
+
 # %% [markdown]
 # ---
 #
@@ -59,7 +63,7 @@ HAM_COLOR = '#0000ff99'
 SPAM_COLOR = '#ff000099'
 
 
-def save_figure(filename, figure_dir='illustrations', dpi=300, *args, **kwargs):
+def save_figure(filename, figure_dir='illustrations', dpi=100, *args, **kwargs):
     if not os.path.exists(figure_dir):
         os.makedirs(figure_dir, exist_ok=True)
     fullpath = os.path.join(figure_dir, filename)
@@ -73,11 +77,6 @@ def save_figure(filename, figure_dir='illustrations', dpi=300, *args, **kwargs):
 column_names = [
     'IsSpam',
     'Message',
-]
-extra_columns = [
-    'Unknown1',
-    'Unknown2',
-    'Unknown3',
 ]
 
 DATASET_URL = 'https://archive.ics.uci.edu/ml/machine-learning-databases/00228/smsspamcollection.zip'
@@ -107,6 +106,12 @@ raw_df.describe()
 
 # %%
 '''
+extra_columns = [
+    'Unknown1',
+    'Unknown2',
+    'Unknown3',
+]
+
 long_messages = raw_df[
     raw_df.unknown1.notna() | raw_df.unknown2.notna() | raw_df.unknown3.notna()
 ]
@@ -132,8 +137,8 @@ sms = raw_df.drop(columns=extra_columns)
 
 # %%
 sms = raw_df
-sms.loc[sms["IsSpam"] == "spam", "SpamValue"] = 1
-sms.loc[sms["IsSpam"] == "ham", "SpamValue"] = 0
+sms.loc[sms['IsSpam'] == 'spam', 'SpamValue'] = 1
+sms.loc[sms['IsSpam'] == 'ham', 'SpamValue'] = 0
 
 # %%
 spam_or_ham_count = sms.IsSpam.value_counts()
@@ -150,6 +155,51 @@ spam_or_ham_count.plot.pie(
 )
 
 save_figure('spam_or_ham_pie.png')
+
+# %%
+nltk.download('stopwords')
+
+# %%
+slang_stopwords = ['u', 'ü', 'ur', '4', '2', 'im', 'dont', 'doin', 'ure']
+singlish_stopwords = [
+    'lah', 'lor', 'shiok', 'bojio', 'like',
+    'hor', 'sian', 'walau', 'eh', 'damn',
+    'ya', 'wah', 'bb', 'leh', 'lar'
+]
+considered_stopwords = {
+    *stopwords.words('english'),
+    *slang_stopwords,
+    #*singlish_stopwords,
+}
+
+
+# %%
+def create_wordcloud(text, stopwords=considered_stopwords, *args, **kwargs):
+    wordcloud = WordCloud(
+        stopwords=stopwords,
+        background_color='white',
+        width=800,
+        height=800,
+        *args, **kwargs
+    )
+    wordcloud_figure = wordcloud.generate(text)
+    
+    plt.figure(figsize=(12, 12))
+    plt.imshow(wordcloud_figure)
+    plt.axis('off')
+
+
+# %%
+ham_text = ' '.join(sms[sms.IsSpam == 'ham']['Message'].tolist())
+create_wordcloud(ham_text, colormap='viridis')
+
+save_figure('ham_wordcloud.png')
+
+# %%
+spam_text = ' '.join(sms[sms.IsSpam == 'spam']['Message'].tolist())
+create_wordcloud(spam_text, colormap='inferno')
+
+save_figure('spam_wordcloud.png')
 
 # %%
 sms['MessageLength'] = sms.Message.apply(len)
@@ -175,10 +225,7 @@ plt.xlabel('Message length')
 save_figure('message_length_histogram.png')
 
 # %%
-sms[sms.IsSpam == 'ham'].describe()
-
-# %%
-sms[sms.IsSpam == 'spam'].describe()
+sms.groupby('IsSpam')[['MessageLength']].describe()
 
 # %% [markdown]
 # ---
@@ -254,18 +301,6 @@ def lower_case_unless_all_caps(tokens):
         for token in tokens
         if token.upper() != token
     )
-
-slang_stopwords = ['u', 'ü', 'ur', '4', '2', 'im', 'dont', 'doin', 'ure']
-singlish_stopwords = [
-    'lah', 'lor', 'shiok', 'bojio', 'like',
-    'hor', 'sian', 'walau', 'eh', 'damn',
-    'ya', 'wah', 'omg', 'bb', 'leh', 'lar'
-]
-considered_stopwords = [
-    *stopwords.words('english'),
-    #*slang_stopwords,
-    #*singlish_stopwords,
-]
 
 def prune_stopwords(message_contents):
     return (
